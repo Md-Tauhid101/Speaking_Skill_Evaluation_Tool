@@ -1,0 +1,46 @@
+# -----------------------------
+# 1. Base Image
+# -----------------------------
+FROM python:3.10-slim
+
+# -----------------------------
+# 2. Set Workdir
+# -----------------------------
+WORKDIR /app
+
+# -----------------------------
+# 3. Install System Dependencies
+# -----------------------------
+# HuggingFace + Streamlit Dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# -----------------------------
+# 4. Copy Project Files
+# -----------------------------
+COPY . /app
+
+# -----------------------------
+# 5. Install Python Dependencies
+# -----------------------------
+RUN pip install --no-cache-dir -r requirements.txt
+
+# -----------------------------
+# 6. Expose Streamlit Port
+# -----------------------------
+EXPOSE 7860
+
+# -----------------------------
+# 7. Set Streamlit Config
+# -----------------------------
+ENV STREAMLIT_SERVER_HEADLESS=true
+ENV STREAMLIT_SERVER_PORT=7860
+ENV STREAMLIT_SERVER_ENABLECORS=false
+ENV STREAMLIT_SERVER_ENABLEXSRSFPROTECTION=false
+
+# -----------------------------
+# 8. Start Command
+# -----------------------------
+CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0"]

@@ -1,9 +1,7 @@
 from sentence_transformers import SentenceTransformer, util
 from transformers import pipeline
 
-# --- Config (use your existing dictionaries) ---
 KEYWORDS = {
-    # MUST HAVE
     "name": ["my name", "i am", "myself"],
     "age": ["years old"],
     "school_class": ["school", "class", "grade"],
@@ -45,7 +43,7 @@ WEIGHTS = {
     "engagement": 15
 }
 
-# --- Utilities ---
+# clean text
 def clean_text(text: str) -> str:
     t = text.lower().replace("\n", " ").strip()
     return " ".join(t.split())
@@ -53,7 +51,7 @@ def clean_text(text: str) -> str:
 def word_count(text: str) -> int:
     return len(clean_text(text).split())
 
-# --- Keyword / Rule functions (Steps 5.2 & 5.3) ---
+# Keyword Rule functions
 def keyword_score_single_category(text: str, keywords: list) -> float:
     text = clean_text(text)
     found = 0
@@ -83,7 +81,7 @@ def flow_score(text: str) -> float:
         return 1.0
     return 0.0
 
-# --- Semantic model (Step 6) ---
+# Semantic model
 _model = None
 def load_semantic_model():
     global _model
@@ -96,16 +94,14 @@ def semantic_similarity(text: str, description: str) -> float:
     emb1 = model.encode(text, convert_to_tensor=True)
     emb2 = model.encode(description, convert_to_tensor=True)
     score = util.cos_sim(emb1, emb2).item()
-    # cosine similarity from sentence-transformers is usually >0 for related text; clamp 0-1
     return max(0.0, min(score, 1.0))
 
-# --- Speech Rate mapping (use duration_sec, if unknown you must provide duration) ---
+# computing word per count
 def compute_wpm(text: str, duration_sec: float) -> float:
     wc = word_count(text)
     return (wc / duration_sec) * 60.0
 
 def speech_rate_score_from_wpm(wpm: float) -> float:
-    # mapping to rubric points (out of 10)
     if wpm > 161:
         return 2.0
     elif 141 <= wpm <= 160:
@@ -117,18 +113,16 @@ def speech_rate_score_from_wpm(wpm: float) -> float:
     else:
         return 2.0
 
-# --- Grammar & TTR (Language & Grammar) ---
+# Grammar & TTR use transformer
 cola_model = pipeline("text-classification", model="textattack/roberta-base-CoLA")
 
 def grammar_score_points(text: str) -> float:
 
-    # Limit input to 512 tokens
     result = cola_model(text[:512])[0]
 
-    label = result["label"]        # ACCEPTABLE or UNACCEPTABLE
-    score = result["score"]        # confidence score (0-1)
+    label = result["label"]        
+    score = result["score"]
 
-    # Convert to grammar_score (0-1)
     if label.upper() == "ACCEPTABLE":
         grammar_score = score
     else:
@@ -161,7 +155,7 @@ def ttr_points(text: str) -> float:
     else:
         return 2.0
 
-# --- Clarity (filler rate) ---
+# Clarity (filler words)
 FILLERS = ["um", "uh", "like", "you know", "so", "actually", "basically", "right", "i mean", "well", "kinda", "sort of", "okay", "hmm", "ah"]
 
 def filler_rate(text: str) -> float:
@@ -171,13 +165,11 @@ def filler_rate(text: str) -> float:
     return (filler_count / total) * 100.0
 
 def clarity_points(text: str) -> float:
-    # rubric: lower filler rate -> higher points, we'll convert filler % to 0-1 then *15
     rate = filler_rate(text)
-    # convert to score 0-1: 0% -> 1.0 ; >15% -> 0
     score = max(0.0, 1.0 - (rate / 15.0))
     return score * WEIGHTS["clarity"]
 
-# --- Engagement (sentiment) ---
+# Engagement (sentiment)
 _sent_model = None
 def load_sentiment_model():
     global _sent_model
@@ -187,17 +179,16 @@ def load_sentiment_model():
 
 def engagement_points(text: str) -> float:
     model = load_sentiment_model()
-    res = model(text[:512])[0]  # limit to first 512 chars to be safe
+    res = model(text[:512])[0] 
     label = res['label']
     score = res['score']
-    # Convert label/score to 0-1 (positive higher)
     if label.upper().startswith("POS"):
         val = score
     else:
         val = 1.0 - score
     return val * WEIGHTS["engagement"]
 
-# --- Combine signals for Content & Structure categories ---
+# Combine signals for Content & Structure categories
 def combined_signal(rule_score: float, semantic_score: float, keyword_score: float) -> float:
     return 0.4 * rule_score + 0.4 * semantic_score + 0.2 * keyword_score
 
@@ -207,17 +198,15 @@ def compute_content_structure_scores(transcript: str):
     good_have = ["about_family_extra", "origin_location", "ambition_goal_dream", "unique_fact", "strengths_achievements"]
 
     per_category = {}
-    raw_total = 0.0  # raw points out of 30 (5*4 + 5*2)
-    # score must-have categories (each up to 4 points)
+    raw_total = 0.0
     for cat in must_have:
         kws = KEYWORDS.get(cat, [])
         rule = 1.0 if any(kw in t for kw in kws) else 0.0
         key = keyword_score_single_category(t, kws)
-        # description for semantic: use specific if exists, else content_structure anchor
         desc = DESCRIPTIONS.get(cat, DESCRIPTIONS["content_structure"])
         sem = semantic_similarity(transcript, desc)
         combined = combined_signal(rule, sem, key)
-        points = combined * 4.0  # each must-have max 4
+        points = combined * 4.0 
         per_category[cat] = {
             "rule": rule, "semantic": round(sem, 3), "keyword": round(key, 3), "points": round(points, 3)
         }
@@ -237,11 +226,10 @@ def compute_content_structure_scores(transcript: str):
         }
         raw_total += points
 
-    # raw_total expected range: 0 - 30
     scaled_to_40 = (raw_total / 30.0) * WEIGHTS["content_structure"]
     return {"per_category": per_category, "raw_total": round(raw_total, 3), "scaled_score": round(scaled_to_40, 2)}
 
-# --- Final pipeline assembly ---
+# Final pipeline assembly
 def score_transcript(transcript: str, duration_sec: float = None):
     result = {}
     t = clean_text(transcript)
@@ -252,7 +240,6 @@ def score_transcript(transcript: str, duration_sec: float = None):
 
     # 2) Speech Rate (needs duration)
     if duration_sec is None:
-        # if duration not provided, attempt a default or mark as None
         speech_points = None
         wpm = None
     else:
@@ -260,10 +247,8 @@ def score_transcript(transcript: str, duration_sec: float = None):
         speech_points = speech_rate_score_from_wpm(wpm)
     result["speech_rate"] = {"wpm": wpm, "points": speech_points}
 
-    # 3) Language & Grammar (20 points = grammar(10) + vocab(10))
     grammar_p = grammar_score_points(transcript)
     vocab_p = ttr_points(transcript)
-    # sum to 20
     lang_points = grammar_p + vocab_p
     result["language_grammar"] = {"grammar_points": grammar_p, "vocab_points": vocab_p, "total": round(lang_points, 2)}
 
@@ -286,13 +271,12 @@ def score_transcript(transcript: str, duration_sec: float = None):
     result["overall_score"] = round(total, 2)
     return result
 
-# --- Example run using provided sample transcript file ---
+# Example run using provided sample transcript file 
 if __name__ == "__main__":
-    SAMPLE_PATH = "./Sample text for case study.txt"  # your uploaded sample transcript
+    SAMPLE_PATH = "./Sample text for case study.txt" 
     with open(SAMPLE_PATH, "r", encoding="utf-8") as f:
         sample_text = f.read()
 
-    # For the sample we know duration ~52s (from earlier notes); if unknown provide duration_sec argument
     out = score_transcript(sample_text, duration_sec=52.0)
     import json
     print(json.dumps(out, indent=2))
