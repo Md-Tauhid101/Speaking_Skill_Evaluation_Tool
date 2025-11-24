@@ -1,13 +1,5 @@
-# scoring.py
-# Full scoring backend following rubric exactly (Option A)
-# Requires: sentence-transformers, transformers, language-tool-python, nltk (for vader), pandas (optional)
-# Run: pip install sentence-transformers transformers language-tool-python nltk
-
-import string
 from sentence_transformers import SentenceTransformer, util
 from transformers import pipeline
-import language_tool_python
-import math
 
 # --- Config (use your existing dictionaries) ---
 KEYWORDS = {
@@ -57,9 +49,6 @@ WEIGHTS = {
 def clean_text(text: str) -> str:
     t = text.lower().replace("\n", " ").strip()
     return " ".join(t.split())
-
-# def remove_punctuation(text: str) -> str:
-#     return text.translate(str.maketrans("", "", string.punctuation))
 
 def word_count(text: str) -> int:
     return len(clean_text(text).split())
@@ -129,25 +118,33 @@ def speech_rate_score_from_wpm(wpm: float) -> float:
         return 2.0
 
 # --- Grammar & TTR (Language & Grammar) ---
-tool = language_tool_python.LanguageTool('en-US')
+cola_model = pipeline("text-classification", model="textattack/roberta-base-CoLA")
 
 def grammar_score_points(text: str) -> float:
-    words = max(1, word_count(text))
-    errors = tool.check(text)
-    error_count = len(errors)
-    errors_per_100 = (error_count / words) * 100.0
-    grammar_score = 1.0 - min(errors_per_100 / 10.0, 1.0)
-    # map to rubric points out of 10
-    if grammar_score > 0.9:
-        return 10.0
-    elif grammar_score >= 0.7:
-        return 8.0
-    elif grammar_score >= 0.5:
-        return 6.0
-    elif grammar_score >= 0.3:
-        return 4.0
+
+    # Limit input to 512 tokens
+    result = cola_model(text[:512])[0]
+
+    label = result["label"]        # ACCEPTABLE or UNACCEPTABLE
+    score = result["score"]        # confidence score (0-1)
+
+    # Convert to grammar_score (0-1)
+    if label.upper() == "ACCEPTABLE":
+        grammar_score = score
     else:
-        return 2.0
+        grammar_score = 1 - score
+
+    # Map to rubric points out of 10
+    if grammar_score > 0.9:
+        return 10
+    elif grammar_score >= 0.7:
+        return 8
+    elif grammar_score >= 0.5:
+        return 6
+    elif grammar_score >= 0.3:
+        return 4
+    else:
+        return 2
 
 def ttr_points(text: str) -> float:
     words = clean_text(text).split()
